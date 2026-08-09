@@ -19,6 +19,7 @@ PROFILE_CHOICES = [
     "gaming_news",
     "podcast",
     "youtube_shorts",
+    "gta_shorts",
 ]
 OUTPUT_DIR = Path(gettempdir()) / "hoopertts_gradio"
 
