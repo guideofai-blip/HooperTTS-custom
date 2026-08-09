@@ -4,6 +4,12 @@
   "reveal_style": "high_energy",
   "ending_style": "punchy",
   "chunk_target": 5,
+
+  "audio": {
+    "speed": 1.15,
+    "energy": 1.20
+  },
+
   "energy_curve": {
     "HOOK": 10,
     "REVEAL": 10,
@@ -13,5 +19,6 @@
     "CONTRAST": 9,
     "NORMAL": 7
   },
+
   "question_style": "urgent"
 }
