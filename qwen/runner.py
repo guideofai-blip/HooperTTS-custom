@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,20 +35,37 @@ def generate(
     output_path: str | Path,
 ) -> GenerationResult:
     """Optimize a script, build a Qwen prompt, generate audio, and save WAV."""
+
     script = Path(script_path)
     output = Path(output_path)
+
     if not script.exists():
-        return GenerationResult(False, None, f"Script not found: {script}")
+        return GenerationResult(
+            False,
+            None,
+            f"Script not found: {script}",
+        )
 
     narration_profile = ProfileManager().load(profile)
+
     original_text = script.read_text(encoding="utf-8")
+
     optimized_text = ScriptOptimizer().optimize(
-        original_text, profile=narration_profile.name
+        original_text,
+        profile=narration_profile.name,
     )
-    narration_plan = NarrationPlanner(narration_profile).plan(optimized_text)
-    prompt = build_prompt(narration_plan, narration_profile)
+
+    narration_plan = NarrationPlanner(narration_profile).plan(
+        optimized_text
+    )
+
+    prompt = build_prompt(
+        narration_plan,
+        narration_profile,
+    )
 
     diagnostics = diagnose()
+
     if not diagnostics.ready:
         return GenerationResult(
             success=False,
@@ -58,17 +76,65 @@ def generate(
 
     try:
         model = load_model(diagnostics.model_location)
+
         wavs, sample_rate = run_inference(
             model=model,
             prompt=prompt,
-            reference_audio=Path(reference_audio) if reference_audio else None,
+            reference_audio=(
+                Path(reference_audio)
+                if reference_audio
+                else None
+            ),
         )
-        save_wav(output, wavs[0], sample_rate)
+
+        # ---------------------------------------------------------
+        # Save the raw Qwen output first.
+        # ---------------------------------------------------------
+
+        raw_output = output.with_name(
+            output.stem + "_raw.wav"
+        )
+
+        save_wav(
+            raw_output,
+            wavs[0],
+            sample_rate,
+        )
+
+        # ---------------------------------------------------------
+        # GTA Shorts audio treatment
+        #
+        # Qwen generates the voice first.
+        # Then FFmpeg makes it faster and more energetic.
+        # ---------------------------------------------------------
+
+        if profile == "gta_shorts":
+
+            process_audio(
+                input_wav=raw_output,
+                output_wav=output,
+                speed=1.15,
+                energy=1.20,
+            )
+
+            # Remove temporary raw file.
+            try:
+                raw_output.unlink()
+            except FileNotFoundError:
+                pass
+
+        else:
+            # For every other profile, keep the original Qwen audio.
+            raw_output.replace(output)
+
     except Exception:
         return GenerationResult(
             success=False,
             output_path=None,
-            diagnostics=f"Qwen generation failed:\n{traceback.format_exc()}",
+            diagnostics=(
+                "Qwen generation failed:\n"
+                f"{traceback.format_exc()}"
+            ),
             prompt=prompt,
         )
 
@@ -80,71 +146,200 @@ def generate(
     )
 
 
-def load_model(model_location: str | None) -> Any:
+def process_audio(
+    input_wav: Path,
+    output_wav: Path,
+    speed: float = 1.0,
+    energy: float = 1.0,
+) -> None:
+    """
+    Post-process generated Qwen audio.
+
+    speed:
+        1.00 = normal
+        1.10 = 10% faster
+        1.15 = 15% faster
+        1.20 = 20% faster
+
+    energy:
+        1.00 = unchanged
+        1.10 = slightly more energetic
+        1.20 = noticeably more energetic
+        1.30 = strong processing
+    """
+
+    speed = max(0.5, min(float(speed), 2.0))
+    energy = max(0.8, min(float(energy), 1.5))
+
+    # Convert energy setting into a small gain increase.
+    gain_db = (energy - 1.0) * 8.0
+
+    filter_chain = (
+        f"atempo={speed},"
+        "acompressor="
+        "threshold=-18dB:"
+        "ratio=3:"
+        "attack=5:"
+        "release=80:"
+        "makeup=2,"
+        f"volume={gain_db}dB"
+    )
+
+    output_wav.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_wav),
+        "-af",
+        filter_chain,
+        "-ar",
+        "24000",
+        "-ac",
+        "1",
+        str(output_wav),
+    ]
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "FFmpeg audio processing failed:\n"
+            f"{result.stderr}"
+        )
+
+
+def load_model(
+    model_location: str | None,
+) -> Any:
     """Load a Qwen3-TTS model with the official qwen_tts wrapper."""
-    checkpoint = resolve_model_checkpoint(model_location)
+
+    checkpoint = resolve_model_checkpoint(
+        model_location
+    )
 
     import torch  # type: ignore[import-not-found]
     from qwen_tts import Qwen3TTSModel  # type: ignore[import-not-found]
 
     register_qwen_tts_model()
 
-    device_map = "cuda:0" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device_map != "cpu" else torch.float32
+    device_map = (
+        "cuda:0"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
+
+    dtype = (
+        torch.bfloat16
+        if device_map != "cpu"
+        else torch.float32
+    )
+
     load_kwargs: dict[str, Any] = {
         "device_map": device_map,
         "dtype": dtype,
     }
+
     if device_map != "cpu":
-        load_kwargs["attn_implementation"] = "flash_attention_2"
+        load_kwargs[
+            "attn_implementation"
+        ] = "flash_attention_2"
 
     try:
-        return Qwen3TTSModel.from_pretrained(checkpoint, **load_kwargs)
+        return Qwen3TTSModel.from_pretrained(
+            checkpoint,
+            **load_kwargs,
+        )
+
     except Exception as exc:
-        if load_kwargs.get("attn_implementation") != "flash_attention_2":
+
+        if (
+            load_kwargs.get("attn_implementation")
+            != "flash_attention_2"
+        ):
             raise
-        load_kwargs.pop("attn_implementation", None)
+
+        load_kwargs.pop(
+            "attn_implementation",
+            None,
+        )
+
         try:
-            return Qwen3TTSModel.from_pretrained(checkpoint, **load_kwargs)
+            return Qwen3TTSModel.from_pretrained(
+                checkpoint,
+                **load_kwargs,
+            )
         except Exception:
             raise exc
 
 
 def register_qwen_tts_model() -> None:
     """Register Qwen3-TTS classes with Transformers when available."""
+
     try:
+
         from qwen_tts.core.models import (  # type: ignore[import-not-found]
             Qwen3TTSConfig,
             Qwen3TTSForConditionalGeneration,
             Qwen3TTSProcessor,
         )
+
         from transformers import (  # type: ignore[import-not-found]
             AutoConfig,
             AutoModel,
             AutoProcessor,
         )
+
     except ImportError:
         return
 
     register_calls = (
-        lambda: AutoConfig.register("qwen3_tts", Qwen3TTSConfig),
-        lambda: AutoModel.register(Qwen3TTSConfig, Qwen3TTSForConditionalGeneration),
-        lambda: AutoProcessor.register(Qwen3TTSConfig, Qwen3TTSProcessor),
+        lambda: AutoConfig.register(
+            "qwen3_tts",
+            Qwen3TTSConfig,
+        ),
+
+        lambda: AutoModel.register(
+            Qwen3TTSConfig,
+            Qwen3TTSForConditionalGeneration,
+        ),
+
+        lambda: AutoProcessor.register(
+            Qwen3TTSConfig,
+            Qwen3TTSProcessor,
+        ),
     )
+
     for register_call in register_calls:
+
         try:
             register_call()
+
         except ValueError as exc:
+
             if "already" not in str(exc).lower():
                 raise
 
 
-def resolve_model_checkpoint(model_location: str | None) -> str:
+def resolve_model_checkpoint(
+    model_location: str | None,
+) -> str:
     """Return an official model id or concrete local snapshot path."""
+
     if not model_location:
         return DEFAULT_QWEN_MODEL_ID
 
     candidate = Path(model_location)
+
     if not candidate.exists():
         return model_location
 
@@ -152,29 +347,50 @@ def resolve_model_checkpoint(model_location: str | None) -> str:
         return str(candidate)
 
     snapshots_dir = candidate / "snapshots"
+
     if snapshots_dir.exists():
+
         snapshots = [
             path
             for path in snapshots_dir.iterdir()
-            if path.is_dir() and (path / "config.json").exists()
+            if (
+                path.is_dir()
+                and (path / "config.json").exists()
+            )
         ]
+
         if snapshots:
-            latest_snapshot = max(snapshots, key=lambda path: path.stat().st_mtime)
+
+            latest_snapshot = max(
+                snapshots,
+                key=lambda path: path.stat().st_mtime,
+            )
+
             return str(latest_snapshot)
 
     return str(candidate)
 
 
 def run_inference(
-    model: Any, prompt: QwenPrompt, reference_audio: Path | None
+    model: Any,
+    prompt: QwenPrompt,
+    reference_audio: Path | None,
 ) -> tuple[Any, int]:
-    """Run the official Qwen3-TTS 12Hz Base voice-clone example path."""
-    if reference_audio is None:
-        raise ValueError("Reference audio is required for the official Base example.")
+    """Run the official Qwen3-TTS 12Hz Base voice-clone path."""
 
-    ref_audio_single = load_reference_audio(reference_audio)
+    if reference_audio is None:
+        raise ValueError(
+            "Reference audio is required for the official Base example."
+        )
+
+    ref_audio_single = load_reference_audio(
+        reference_audio
+    )
+
     ref_text_single = None
+
     syn_text_single = prompt.optimized_text
+
     syn_lang_single = "Auto"
 
     common_gen_kwargs = dict(
@@ -191,6 +407,7 @@ def run_inference(
     )
 
     xvec_only = True
+
     return model.generate_voice_clone(
         text=syn_text_single,
         language=syn_lang_single,
@@ -201,17 +418,35 @@ def run_inference(
     )
 
 
-def load_reference_audio(reference_audio: Path) -> str:
-    """Return a reference audio path in the form expected by Qwen voice clone."""
+def load_reference_audio(
+    reference_audio: Path,
+) -> str:
+    """Return a reference audio path for Qwen voice cloning."""
+
     if not reference_audio.exists():
-        raise FileNotFoundError(f"Reference audio not found: {reference_audio}")
+        raise FileNotFoundError(
+            f"Reference audio not found: {reference_audio}"
+        )
 
     return str(reference_audio)
 
 
-def save_wav(output_path: Path, wav: Any, sample_rate: int) -> None:
+def save_wav(
+    output_path: Path,
+    wav: Any,
+    sample_rate: int,
+) -> None:
     """Write generated audio to a WAV file."""
+
     import soundfile as sf  # type: ignore[import-not-found]
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(output_path, wav, sample_rate)
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    sf.write(
+        output_path,
+        wav,
+        sample_rate,
+    )
