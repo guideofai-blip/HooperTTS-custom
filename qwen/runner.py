@@ -174,7 +174,13 @@ def process_audio(
         "attack=5:"
         "release=80:"
         "makeup=2,"
-        f"volume={gain_db}dB"
+        # Gentle loudness leveling keeps later narration from becoming
+        # noticeably quieter without flattening the entire performance.
+        "loudnorm="
+        "I=-16:"
+        "TP=-1.5:"
+        "LRA=7:"
+        "linear=false"
     )
 
     output_wav.parent.mkdir(
