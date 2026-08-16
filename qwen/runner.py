@@ -162,6 +162,11 @@ def process_audio(
     gain_db = (energy - 1.0) * 8.0
 
     filter_chain = (
+        # Remove a very short leading vocal artifact that can sometimes
+        # appear with Qwen ICL generation ("aaa", "dee", etc.).
+        # Keep this deliberately small so real speech is not clipped.
+        "atrim=start=0.12,"
+        "asetpts=PTS-STARTPTS,"
         f"atempo={speed},"
         "acompressor="
         "threshold=-18dB:"
