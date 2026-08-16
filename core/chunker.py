@@ -115,7 +115,22 @@ class SemanticChunker:
         if tokens:
             chunks.append(self._restore_phrases(" ".join(tokens), placeholders))
 
-        return [chunk.strip() for chunk in chunks if chunk.strip()]
+        rendered_chunks: list[str] = []
+
+        for chunk in chunks:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+
+            # Newlines alone are often not enough to create a natural breath in
+            # TTS. A light comma cue gives Qwen a small pause without inserting
+            # spoken stage directions or artificial words.
+            if not chunk.endswith((",", ";", ":", ".", "!", "?")):
+                chunk = f"{chunk},"
+
+            rendered_chunks.append(chunk)
+
+        return rendered_chunks
 
     def _normalize(self, sentence: str) -> str:
         normalized = sentence.replace("\r\n", "\n").replace("\r", "\n")
@@ -172,16 +187,35 @@ class SemanticChunker:
     def _boundary_score(self, current_token: str, next_token: str) -> int:
         current = self._clean_token(current_token)
         next_clean = self._clean_token(next_token)
+
+        # Prefer a pause after existing punctuation.
         if current_token.rstrip().endswith((",", ";", ":", ")", "]", "}")):
+            return 6
+
+        # Prefer a pause BEFORE a conjunction/transition rather than after it.
+        # This keeps spoken chunks grammatical:
+        # "The story is bigger" / "but nobody noticed it"
+        if next_clean in self.TRANSITIONS:
             return 5
-        if current in self.TRANSITIONS:
+
+        if next_clean in self.CONJUNCTIONS:
             return 4
-        if current in self.CONJUNCTIONS:
+
+        # Relative clauses are also good places for a short breath.
+        if next_clean in self.RELATIVE_WORDS:
             return 3
-        if current in self.RELATIVE_WORDS or next_clean in self.RELATIVE_WORDS:
+
+        # Existing transition/conjunction at the end is still acceptable,
+        # but lower priority than a boundary before one.
+        if current in self.TRANSITIONS:
             return 2
-        if current in self.PREPOSITIONS:
+
+        if current in self.RELATIVE_WORDS:
             return 1
+
+        if current in self.PREPOSITIONS:
+            return 0
+
         return 0
 
     def _count_tokens(
