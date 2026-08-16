@@ -400,25 +400,24 @@ def run_inference(
     reference_audio: Path | None,
 ) -> tuple[Any, int]:
     """
-    Run Qwen3-TTS Base voice cloning.
+    Run Qwen3-TTS Base voice cloning with ICL conditioning.
 
-    We use the reference transcript and x_vector_only_mode=False
-    so the reference clip provides more conditioning than
-    speaker identity alone.
+    The reference transcript is generated automatically with
+    faster-whisper, then passed to Qwen with
+    x_vector_only_mode=False so the reference speech provides
+    more conditioning than speaker identity alone.
     """
 
     if reference_audio is None:
         raise ValueError(
-            "Reference audio is required for the official Base example."
+            "Reference audio is required for voice cloning."
         )
 
-    ref_audio_single = load_reference_audio(
-        reference_audio
-    )
+    ref_audio_single = load_reference_audio(reference_audio)
 
-    # Automatically obtain the reference transcript.
-    # This avoids hard-coding a transcript that may not match
-    # the actual voice sample.
+    # Automatically transcribe the exact reference recording.
+    # This avoids requiring the user to manually enter the
+    # reference transcript.
     ref_text_single = transcribe_reference_audio(
         reference_audio
     )
@@ -439,8 +438,8 @@ def run_inference(
         subtalker_temperature=0.9,
     )
 
-    # False lets Qwen use the reference transcript/content
-    # in addition to the speaker embedding.
+    # ICL mode: use the reference speech + transcript in
+    # addition to the speaker embedding.
     xvec_only = False
 
     return model.generate_voice_clone(
@@ -451,7 +450,6 @@ def run_inference(
         x_vector_only_mode=xvec_only,
         **common_gen_kwargs,
     )
-
 
 def load_reference_audio(
     reference_audio: Path,
