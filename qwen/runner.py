@@ -435,12 +435,12 @@ def run_inference(
         do_sample=True,
         top_k=50,
         top_p=1.0,
-        temperature=0.9,
+        temperature=0.95,
         repetition_penalty=1.05,
         subtalker_dosample=True,
         subtalker_top_k=50,
         subtalker_top_p=1.0,
-        subtalker_temperature=0.9,
+        subtalker_temperature=0.95,
     )
 
     # ICL mode: use the reference speech + transcript in
