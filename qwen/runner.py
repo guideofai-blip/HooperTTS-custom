@@ -87,10 +87,6 @@ def generate(
             ),
         )
 
-        # ---------------------------------------------------------
-        # Save the raw Qwen output first.
-        # ---------------------------------------------------------
-
         raw_output = output.with_name(
             output.stem + "_raw.wav"
         )
@@ -101,15 +97,10 @@ def generate(
             sample_rate,
         )
 
-        # ---------------------------------------------------------
-        # GTA Shorts audio treatment
-        #
-        # Qwen generates the voice first.
-        # Then FFmpeg makes it faster and more energetic.
-        # ---------------------------------------------------------
-
+        # GTA Shorts: faster delivery + tighter dynamics.
+        # Qwen Base does not expose a direct speed/energy control,
+        # so this is applied after generation.
         if profile == "gta_shorts":
-
             process_audio(
                 input_wav=raw_output,
                 output_wav=output,
@@ -117,14 +108,11 @@ def generate(
                 energy=1.20,
             )
 
-            # Remove temporary raw file.
             try:
                 raw_output.unlink()
             except FileNotFoundError:
                 pass
-
         else:
-            # For every other profile, keep the original Qwen audio.
             raw_output.replace(output)
 
     except Exception:
@@ -153,7 +141,7 @@ def process_audio(
     energy: float = 1.0,
 ) -> None:
     """
-    Post-process generated Qwen audio.
+    Post-process generated audio.
 
     speed:
         1.00 = normal
@@ -171,7 +159,6 @@ def process_audio(
     speed = max(0.5, min(float(speed), 2.0))
     energy = max(0.8, min(float(energy), 1.5))
 
-    # Convert energy setting into a small gain increase.
     gain_db = (energy - 1.0) * 8.0
 
     filter_chain = (
@@ -261,7 +248,6 @@ def load_model(
         )
 
     except Exception as exc:
-
         if (
             load_kwargs.get("attn_implementation")
             != "flash_attention_2"
@@ -286,19 +272,16 @@ def register_qwen_tts_model() -> None:
     """Register Qwen3-TTS classes with Transformers when available."""
 
     try:
-
         from qwen_tts.core.models import (  # type: ignore[import-not-found]
             Qwen3TTSConfig,
             Qwen3TTSForConditionalGeneration,
             Qwen3TTSProcessor,
         )
-
         from transformers import (  # type: ignore[import-not-found]
             AutoConfig,
             AutoModel,
             AutoProcessor,
         )
-
     except ImportError:
         return
 
@@ -307,12 +290,10 @@ def register_qwen_tts_model() -> None:
             "qwen3_tts",
             Qwen3TTSConfig,
         ),
-
         lambda: AutoModel.register(
             Qwen3TTSConfig,
             Qwen3TTSForConditionalGeneration,
         ),
-
         lambda: AutoProcessor.register(
             Qwen3TTSConfig,
             Qwen3TTSProcessor,
@@ -320,12 +301,9 @@ def register_qwen_tts_model() -> None:
     )
 
     for register_call in register_calls:
-
         try:
             register_call()
-
         except ValueError as exc:
-
             if "already" not in str(exc).lower():
                 raise
 
@@ -349,7 +327,6 @@ def resolve_model_checkpoint(
     snapshots_dir = candidate / "snapshots"
 
     if snapshots_dir.exists():
-
         snapshots = [
             path
             for path in snapshots_dir.iterdir()
@@ -360,15 +337,61 @@ def resolve_model_checkpoint(
         ]
 
         if snapshots:
-
             latest_snapshot = max(
                 snapshots,
                 key=lambda path: path.stat().st_mtime,
             )
-
             return str(latest_snapshot)
 
     return str(candidate)
+
+
+def transcribe_reference_audio(
+    reference_audio: Path,
+) -> str:
+    """
+    Automatically transcribe the reference clip.
+
+    This lets us use Qwen Base voice cloning with
+    x_vector_only_mode=False without requiring the user
+    to manually type the reference transcript.
+    """
+
+    try:
+        from faster_whisper import WhisperModel  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "faster-whisper is required to automatically "
+            "transcribe the reference audio."
+        ) from exc
+
+    # Small model is sufficient for a short reference clip
+    # and keeps the transcription step practical in Colab.
+    whisper_model = WhisperModel(
+        "small",
+        device="cuda",
+        compute_type="float16",
+    )
+
+    segments, _ = whisper_model.transcribe(
+        str(reference_audio),
+        beam_size=5,
+        vad_filter=True,
+    )
+
+    text = " ".join(
+        segment.text.strip()
+        for segment in segments
+        if segment.text.strip()
+    ).strip()
+
+    if not text:
+        raise RuntimeError(
+            "Could not transcribe the reference audio. "
+            "Please use a clear 5–15 second reference clip."
+        )
+
+    return text
 
 
 def run_inference(
@@ -376,7 +399,13 @@ def run_inference(
     prompt: QwenPrompt,
     reference_audio: Path | None,
 ) -> tuple[Any, int]:
-    """Run the official Qwen3-TTS 12Hz Base voice-clone path."""
+    """
+    Run Qwen3-TTS Base voice cloning.
+
+    We use the reference transcript and x_vector_only_mode=False
+    so the reference clip provides more conditioning than
+    speaker identity alone.
+    """
 
     if reference_audio is None:
         raise ValueError(
@@ -387,10 +416,14 @@ def run_inference(
         reference_audio
     )
 
-    ref_text_single = None
+    # Automatically obtain the reference transcript.
+    # This avoids hard-coding a transcript that may not match
+    # the actual voice sample.
+    ref_text_single = transcribe_reference_audio(
+        reference_audio
+    )
 
     syn_text_single = prompt.optimized_text
-
     syn_lang_single = "Auto"
 
     common_gen_kwargs = dict(
@@ -406,7 +439,9 @@ def run_inference(
         subtalker_temperature=0.9,
     )
 
-    xvec_only = True
+    # False lets Qwen use the reference transcript/content
+    # in addition to the speaker embedding.
+    xvec_only = False
 
     return model.generate_voice_clone(
         text=syn_text_single,
