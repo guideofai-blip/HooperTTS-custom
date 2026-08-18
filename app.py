@@ -1,4 +1,4 @@
-"""Gradio web interface for HooperTTS native Qwen generation."""
+"""Gradio web interface for HooperTTS optional TTS backends."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import gradio as gr
 
-from qwen.runner import generate
+from core.generation import generate
 
 
 PROFILE_CHOICES = [
@@ -46,6 +46,7 @@ def generate_speech(
     script_file: Any,
     reference_audio: Any,
     profile: str,
+    backend: str = "qwen",
 ) -> tuple[str, str, str | None, str | None, str]:
     """Generate speech and return UI-ready optimized text, prompt, audio, and logs."""
     script_path = _uploaded_path(script_file)
@@ -64,6 +65,7 @@ def generate_speech(
     output_path = OUTPUT_DIR / f"hoopertts_{uuid4().hex}.wav"
 
     result = generate(
+        backend=backend,
         script_path=script_path,
         reference_audio=reference_path,
         profile=profile,
@@ -71,7 +73,12 @@ def generate_speech(
     )
 
     optimized_script = result.prompt.optimized_text if result.prompt else ""
-    style_prompt = result.prompt.style_prompt if result.prompt else ""
+    style_prompt = ""
+    if result.prompt:
+        if hasattr(result.prompt, "style_prompt"):
+            style_prompt = result.prompt.style_prompt
+        else:
+            style_prompt = result.prompt.instruction
     audio_path = result.output_path if result.success else None
     download_path = result.output_path if result.success else None
 
@@ -86,11 +93,11 @@ def generate_speech(
 
 def build_interface() -> gr.Blocks:
     """Build and return the HooperTTS Gradio interface."""
-    with gr.Blocks(title="HooperTTS Qwen Generator") as interface:
-        gr.Markdown("# HooperTTS Qwen Generator")
+    with gr.Blocks(title="HooperTTS Generator") as interface:
+        gr.Markdown("# HooperTTS Generator")
         gr.Markdown(
             "Upload a narration script and optional reference voice, then generate "
-            "Qwen3-TTS audio from the optimized HooperTTS plan."
+            "audio from the optimized HooperTTS plan. Qwen is the default backend."
         )
 
         with gr.Row():
@@ -112,6 +119,12 @@ def build_interface() -> gr.Blocks:
             choices=PROFILE_CHOICES,
             value="default",
             label="Narration Profile",
+        )
+        backend_input = _component(
+            gr.Dropdown,
+            choices=["qwen", "cosyvoice"],
+            value="qwen",
+            label="TTS Backend",
         )
         generate_button = _component(
             gr.Button,
@@ -137,7 +150,7 @@ def build_interface() -> gr.Blocks:
 
         generate_button.click(
             fn=generate_speech,
-            inputs=[script_input, reference_input, profile_input],
+            inputs=[script_input, reference_input, profile_input, backend_input],
             outputs=[
                 optimized_output,
                 style_output,

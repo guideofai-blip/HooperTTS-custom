@@ -16,7 +16,7 @@ dependencies = []
 hoopertts = "core.cli:main"
 
 [tool.setuptools]
-packages = ["core", "qwen"]
+packages = ["core", "core.cosyvoice_backend", "qwen"]
 py-modules = ["benchmark", "evaluate"]
 include-package-data = true
 

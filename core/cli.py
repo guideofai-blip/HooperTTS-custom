@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.set_defaults(command=doctor_command)
 
     generate_parser = subparsers.add_parser(
-        "generate", help="Optimize a script and generate WAV audio with Qwen3-TTS."
+        "generate", help="Optimize a script and generate WAV audio."
     )
     generate_parser.add_argument("--script", required=True, type=Path)
     generate_parser.add_argument("--reference", type=Path)
@@ -72,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Narration profile to use for generation.",
     )
     generate_parser.add_argument("--output", required=True, type=Path)
+    generate_parser.add_argument(
+        "--backend",
+        choices=("qwen", "cosyvoice"),
+        default="qwen",
+        help="TTS backend. Defaults to qwen.",
+    )
     generate_parser.set_defaults(command=generate_command)
 
     validate_parser = subparsers.add_parser(
@@ -137,12 +143,13 @@ def doctor_command(args: argparse.Namespace) -> int:
 
 
 def generate_command(args: argparse.Namespace) -> int:
-    """Generate speech with the optional Qwen backend."""
-    from qwen.runner import generate
+    """Generate speech with the selected optional backend."""
+    from core.generation import generate
 
     script_path = require_file(args.script)
     reference_audio = require_file(args.reference) if args.reference else None
     result = generate(
+        backend=args.backend,
         script_path=script_path,
         reference_audio=reference_audio,
         profile=args.profile,
@@ -151,10 +158,14 @@ def generate_command(args: argparse.Namespace) -> int:
     print(result.diagnostics)
     if result.prompt:
         print()
-        print("Qwen Prompt")
-        print("===========")
-        print(f"Style: {result.prompt.style_prompt}")
-        print(f"Speaker: {result.prompt.speaker_prompt}")
+        print(f"{args.backend.title()} Prompt")
+        print("================")
+        if hasattr(result.prompt, "style_prompt"):
+            print(f"Style: {result.prompt.style_prompt}")
+            print(f"Speaker: {result.prompt.speaker_prompt}")
+        else:
+            print(f"Instruction: {result.prompt.instruction}")
+            print(f"Speed: {result.prompt.speed:.2f}")
     return 0 if result.success else 1
 
 
