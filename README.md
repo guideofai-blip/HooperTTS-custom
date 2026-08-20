@@ -13,7 +13,7 @@ Built on top of the official Qwen3-TTS models.
 
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](
-https://colab.research.google.com/github/XADITYAM/HooperTTS/blob/main/notebooks/HooperTTS_Qwen.ipynb
+https://colab.research.google.com/github/guideofai-blip/HooperTTS-custom/blob/main/notebooks/HooperTTS_Qwen.ipynb
 )
 
 ## Features
